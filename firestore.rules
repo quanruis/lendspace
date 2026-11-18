@@ -1,0 +1,47 @@
+rules_version = '2';
+// LendSpace – aturan keamanan Firestore.
+// Hanya akun @bpkpenabur.sch.id (email terverifikasi) yang bisa membaca/menulis.
+// Guru = email yang terdaftar di dokumen config/teachers, field "emails" (array).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.matches('.*@bpkpenabur[.]sch[.]id');
+    }
+    function isTeacher() {
+      return signedIn()
+        && request.auth.token.email.lower() in get(/databases/$(database)/documents/config/teachers).data.emails;
+    }
+
+    // Daftar guru: bisa dibaca semua pengguna sekolah, hanya diubah lewat Firebase Console.
+    match /config/{doc} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Barang & ruang
+    match /catalog/{id} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    // Pengajuan: siswa membuat dan membaca miliknya sendiri, guru memproses semuanya
+    match /requests/{id} {
+      allow read: if signedIn() && (resource.data.uid == request.auth.uid || isTeacher());
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'menunggu';
+      allow update, delete: if isTeacher();
+    }
+
+    // Notifikasi: pemilik membaca dan menandai dibaca, guru membuat saat memproses
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isTeacher();
+      allow update: if signedIn() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+    }
+  }
+}
